@@ -65,6 +65,56 @@ class DocumentResponse(BaseModel):
 class DocumentDetailResponse(DocumentResponse):
     ocr_text: str | None
     extracted_fields: list[ExtractedFieldResponse] = []
+    agent_trace: list[dict] = []  # F2.2 — "How this was extracted"
+
+
+# ---------- Reminders (F2.3) ----------
+class ReminderResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    document_id: uuid.UUID | None
+    title: str
+    due_date: datetime | None
+    status: str
+    created_at: datetime
+
+
+class ReminderUpdateRequest(BaseModel):
+    status: str = Field(pattern="^(pending|done|dismissed)$")
+
+
+# ---------- Insights (F2.7) ----------
+class InsightResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    type: str
+    description: str | None
+    related_reminder_ids: list[uuid.UUID] | None
+    severity: str
+    created_at: datetime
+
+
+# ---------- Sharing (F2.8) ----------
+class ShareRequest(BaseModel):
+    shared_with_email: EmailStr
+    permission: str = Field(default="view", pattern="^(view|edit)$")
+    expires_at: datetime | None = None
+
+
+class ShareGrantResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    document_id: uuid.UUID
+    shared_with_user_id: uuid.UUID
+    permission: str
+    expires_at: datetime | None
+    created_at: datetime
+
+
+# ---------- Account / Premium (F2.9) ----------
+class PlanResponse(BaseModel):
+    plan_tier: str
+    document_limit: int | None  # None = unlimited
 
 
 # ---------- Chat ----------
@@ -84,6 +134,8 @@ class MessageResponse(BaseModel):
 class ChatResponse(BaseModel):
     conversation_id: uuid.UUID
     message: MessageResponse
+    intent: str = "question"  # F2.5 router intent
+    citations: list[dict] = []  # F2.4 [{document_id, filename}]
 
 
 class ConversationResponse(BaseModel):

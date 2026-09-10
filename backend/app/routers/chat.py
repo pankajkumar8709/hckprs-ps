@@ -14,14 +14,14 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Conversation, Document, ExtractedField, Message, User
+from app.models import Conversation, Document, ExtractedField, Message, Reminder, User
 from app.schemas import (
     ChatRequest,
     ChatResponse,
     ConversationResponse,
     MessageResponse,
 )
-from app.services import llm
+from app.services import llm, rag
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -55,6 +55,23 @@ def _build_context(db: Session, user_id: uuid.UUID) -> str:
             parts.append(f"\n--- Document: {d.filename} ---\n{d.ocr_text[:6000]}")
 
     return "\n".join(parts).strip()
+
+
+def _reminders_summary(db: Session, user_id: uuid.UUID) -> str:
+    reminders = (
+        db.query(Reminder)
+        .filter(Reminder.user_id == user_id, Reminder.status == "pending")  # RULE 4
+        .order_by(Reminder.due_date.asc().nullslast())
+        .limit(20)
+        .all()
+    )
+    if not reminders:
+        return "You have no pending reminders."
+    lines = ["Your pending reminders:"]
+    for r in reminders:
+        due = r.due_date.date().isoformat() if r.due_date else "no date"
+        lines.append(f"- {r.title} (due {due})")
+    return "\n".join(lines)
 
 
 @router.post("", response_model=ChatResponse)
@@ -94,20 +111,39 @@ def chat(
     )
     db.commit()
 
-    context = _build_context(db, current_user.id)
-    answer = llm.answer_question(body.message, context)
+    # F2.5 — Router Agent classifies intent, dispatch to the right path.
+    intent = llm.route_intent(body.message)
+    citations: list[dict] = []
+
+    if intent == "show_reminders":
+        answer = _reminders_summary(db, current_user.id)
+    elif intent == "upload_help":
+        answer = ("To add a document, use the upload panel (or POST /documents/"
+                  "upload). PDF, TXT, MD and images are supported.")
+    else:
+        # question / show_insights / general -> ground in the user's documents.
+        # F2.4 — try user-scoped RAG retrieval first; fall back to whole-text.
+        rag_context, citations = rag.search(db, current_user.id, body.message, k=5)
+        context = rag_context or _build_context(db, current_user.id)
+        answer = llm.answer_question(body.message, context)
 
     assistant_msg = Message(
         conversation_id=conv.id,
         user_id=current_user.id,
         role="assistant",
         content=answer,
+        agent_trace_json={"intent": intent, "citations": citations},
     )
     db.add(assistant_msg)
     db.commit()
     db.refresh(assistant_msg)
 
-    return ChatResponse(conversation_id=conv.id, message=assistant_msg)
+    return ChatResponse(
+        conversation_id=conv.id,
+        message=assistant_msg,
+        intent=intent,
+        citations=citations,
+    )
 
 
 @router.get("/conversations", response_model=list[ConversationResponse])
