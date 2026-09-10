@@ -3,7 +3,9 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import { Sparkles, ArrowLeft } from "lucide-react";
 import { api, setTokens, ApiError } from "@/lib/api";
+import { Button } from "@/components/ui/Button";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -19,12 +21,10 @@ export default function SignupPage() {
     setLoading(true);
     try {
       await api.register(email, password, fullName || undefined);
-      // Auto-login after successful registration.
       const res = await api.login(email, password);
       setTokens(res.access_token, res.refresh_token);
       router.replace("/chat");
     } catch (err) {
-      // Real backend error, e.g. "Email already registered" (409).
       setError(err instanceof ApiError ? err.message : "Sign up failed");
     } finally {
       setLoading(false);
@@ -32,54 +32,50 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-6">
-      <motion.form
-        onSubmit={onSubmit}
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        className="w-full max-w-sm rounded-2xl border border-border bg-panel p-7"
-      >
-        <Link href="/" className="text-sm text-muted hover:text-white">← Home</Link>
-        <h1 className="mt-3 text-2xl font-bold">Create your account</h1>
-        <p className="text-sm text-muted mt-1">Start understanding your documents.</p>
+    <div className="min-h-screen bg-hero-gradient flex items-center justify-center px-6">
+      <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}
+        className="w-full max-w-sm">
+        <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-body hover:text-ink mb-4">
+          <ArrowLeft size={15} /> Home
+        </Link>
+        <div className="bg-surface border border-border rounded-2xl shadow-card p-7">
+          <span className="h-10 w-10 rounded-xl bg-brand-gradient flex items-center justify-center text-white">
+            <Sparkles size={19} />
+          </span>
+          <h1 className="mt-4 text-2xl font-bold text-ink tracking-tight">Create your account</h1>
+          <p className="text-sm text-body mt-1">Start understanding your documents.</p>
 
-        <label className="block mt-6 text-sm">Full name (optional)</label>
-        <input
-          value={fullName} onChange={(e) => setFullName(e.target.value)}
-          className="mt-1 w-full rounded-lg bg-panel2 border border-border px-3 py-2 outline-none focus:border-accent"
-          placeholder="Jane Doe"
-        />
-        <label className="block mt-4 text-sm">Email</label>
-        <input
-          type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-          className="mt-1 w-full rounded-lg bg-panel2 border border-border px-3 py-2 outline-none focus:border-accent"
-          placeholder="you@example.com"
-        />
-        <label className="block mt-4 text-sm">Password</label>
-        <input
-          type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)}
-          className="mt-1 w-full rounded-lg bg-panel2 border border-border px-3 py-2 outline-none focus:border-accent"
-          placeholder="At least 8 characters"
-        />
-
-        {error && (
-          <p className="mt-4 text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-lg px-3 py-2">
-            {error}
+          <form onSubmit={onSubmit} className="mt-6 space-y-4">
+            <div>
+              <label htmlFor="name" className="block text-sm text-body mb-1">Full name (optional)</label>
+              <input id="name" value={fullName} onChange={(e) => setFullName(e.target.value)}
+                className="w-full rounded-xl bg-canvas border border-border px-3.5 py-2.5 text-ink outline-none focus:border-brand focus:ring-2 focus:ring-ring transition"
+                placeholder="Jane Doe" />
+            </div>
+            <div>
+              <label htmlFor="email" className="block text-sm text-body mb-1">Email</label>
+              <input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
+                className="w-full rounded-xl bg-canvas border border-border px-3.5 py-2.5 text-ink outline-none focus:border-brand focus:ring-2 focus:ring-ring transition"
+                placeholder="you@example.com" />
+            </div>
+            <div>
+              <label htmlFor="password" className="block text-sm text-body mb-1">Password</label>
+              <input id="password" type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-xl bg-canvas border border-border px-3.5 py-2.5 text-ink outline-none focus:border-brand focus:ring-2 focus:ring-ring transition"
+                placeholder="At least 8 characters" />
+            </div>
+            {error && (
+              <p className="text-sm text-danger bg-danger-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
+            )}
+            <Button type="submit" size="lg" disabled={loading} className="w-full">
+              {loading ? "Creating…" : "Sign up"}
+            </Button>
+          </form>
+          <p className="mt-5 text-sm text-body text-center">
+            Already have an account? <Link href="/login" className="text-brand-600 font-medium hover:underline">Log in</Link>
           </p>
-        )}
-
-        <button
-          type="submit" disabled={loading}
-          className="mt-6 w-full rounded-lg bg-accent hover:bg-accent2 disabled:opacity-60 transition-colors py-2.5 font-medium"
-        >
-          {loading ? "Creating…" : "Sign up"}
-        </button>
-        <p className="mt-4 text-sm text-muted text-center">
-          Already have an account?{" "}
-          <Link href="/login" className="text-accent2 hover:underline">Log in</Link>
-        </p>
-      </motion.form>
+        </div>
+      </motion.div>
     </div>
   );
 }

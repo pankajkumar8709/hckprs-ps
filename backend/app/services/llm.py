@@ -50,16 +50,41 @@ def _generate(prompt: str) -> str:
     return _generate_gemini(prompt)
 
 
-def _generate_groq(prompt: str) -> str:
+def _generate_groq(prompt: str, max_tokens: int | None = None) -> str:
     from groq import Groq
 
     client = Groq(api_key=settings.LLM_API_KEY, timeout=_TIMEOUT, max_retries=1)
+    kwargs = {}
+    if max_tokens:
+        kwargs["max_tokens"] = max_tokens
     resp = client.chat.completions.create(
         model=_model(),
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
+        **kwargs,
     )
     return (resp.choices[0].message.content or "").strip()
+
+
+def _stream_groq(prompt: str, max_tokens: int | None = None):
+    """Yield answer chunks as they generate (perceived-latency win)."""
+    from groq import Groq
+
+    client = Groq(api_key=settings.LLM_API_KEY, timeout=_TIMEOUT, max_retries=1)
+    kwargs = {}
+    if max_tokens:
+        kwargs["max_tokens"] = max_tokens
+    stream = client.chat.completions.create(
+        model=_model(),
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+        stream=True,
+        **kwargs,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else None
+        if delta:
+            yield delta
 
 
 def _generate_gemini(prompt: str) -> str:
@@ -197,10 +222,45 @@ def answer_question(question: str, context: str) -> str:
     if not context.strip():
         return "You don't have any extracted document data yet to answer from."
     try:
-        answer = _generate(_QA_PROMPT.format(context=context[:12000], question=question))
+        prompt = _QA_PROMPT.format(context=context[:_QA_CONTEXT_CHARS], question=question)
+        if _provider() == "groq":
+            answer = _generate_groq(prompt, max_tokens=_ANSWER_MAX_TOKENS)
+        else:
+            answer = _generate(prompt)
     except Exception:
         return "The assistant is temporarily unavailable. Please try again."
     return answer or "I couldn't generate an answer."
+
+
+# Latency tuning: trimmed context + bounded generation. Enough for grounded Q&A
+# over personal documents; no feature loss.
+_QA_CONTEXT_CHARS = 6000
+_ANSWER_MAX_TOKENS = 400
+
+
+def answer_question_stream(question: str, context: str):
+    """Streaming Q&A: yields answer chunks. Falls back to a single yield for the
+    non-Groq path or the not-configured / empty-context cases."""
+    if not _configured():
+        yield ("LLM is not configured (no LLM_API_KEY), so I can't answer from "
+               "your documents yet. Set LLM_API_KEY in backend/.env.")
+        return
+    if not context.strip():
+        yield "You don't have any extracted document data yet to answer from."
+        return
+    prompt = _QA_PROMPT.format(context=context[:_QA_CONTEXT_CHARS], question=question)
+    try:
+        if _provider() == "groq":
+            got = False
+            for chunk in _stream_groq(prompt, max_tokens=_ANSWER_MAX_TOKENS):
+                got = True
+                yield chunk
+            if not got:
+                yield "I couldn't generate an answer."
+        else:
+            yield _generate(prompt) or "I couldn't generate an answer."
+    except Exception:
+        yield "The assistant is temporarily unavailable. Please try again."
 
 
 # =====================================================================
@@ -352,11 +412,19 @@ def ingest_document(ocr_text: str) -> dict:
 
 _ROUTER_PROMPT = """Classify the user's chat message intent. Return ONLY one word
 from this set: question, show_reminders, show_insights, upload_help, general.
-- question: asks about the content of their documents
-- show_reminders: asks about deadlines, due dates, reminders, tasks
-- show_insights: asks about conflicts, clashes, risks, patterns across documents
-- upload_help: asks how to upload / add a document
-- general: anything else / greetings
+
+Rules:
+- question: ANY request for information that could be answered from the user's
+  documents — including asking about a deadline, due date, timeline, amount,
+  party, or "what does X say". If the user wants a FACT, it is `question`.
+- show_reminders: ONLY when the user explicitly asks to see/list their reminder
+  or task LIST itself, e.g. "show my reminders", "what's on my to-do list",
+  "list my tasks". Not for asking when a specific thing is due.
+- show_insights: explicitly asks to see conflicts/clashes/insights across docs.
+- upload_help: asks HOW to upload / add a document.
+- general: greetings or anything unrelated to documents.
+
+When in doubt between question and show_reminders, choose question.
 
 MESSAGE: {message}
 INTENT:"""
@@ -365,12 +433,30 @@ _VALID_INTENTS = {"question", "show_reminders", "show_insights", "upload_help", 
 
 
 def route_intent(message: str) -> str:
-    """F2.5 Router Agent: classify chat intent. Falls back to 'question'."""
-    if not _configured():
-        return "question"
-    try:
-        raw = _generate(_ROUTER_PROMPT.format(message=message[:1000]))
-    except Exception:
-        return "question"
-    word = re.sub(r"[^a-z_]", "", (raw or "").strip().lower().split()[0]) if raw.strip() else ""
-    return word if word in _VALID_INTENTS else "question"
+    """F2.5 Router: keyword-first, LLM only as a rare fallback.
+
+    Nearly every message is a `question`, so we AVOID a second Groq round-trip on
+    the chat critical path: only explicit list/help phrasings are matched cheaply,
+    and the LLM router is consulted just for a small ambiguous middle ground.
+    """
+    m = (message or "").lower().strip()
+    if not m:
+        return "general"
+
+    # Cheap, unambiguous matches — no LLM call.
+    reminder_kw = ("show my reminder", "list my reminder", "my reminders",
+                   "my tasks", "to-do", "to do list", "todo list", "my to-do")
+    insight_kw = ("show insight", "my insights", "any conflicts", "date clash",
+                  "clashing", "renewal risk", "cross-document")
+    upload_kw = ("how do i upload", "how to upload", "how do i add a document",
+                 "how to add a document")
+    if any(k in m for k in upload_kw):
+        return "upload_help"
+    if any(k in m for k in reminder_kw):
+        return "show_reminders"
+    if any(k in m for k in insight_kw):
+        return "show_insights"
+
+    # Everything else is treated as a question WITHOUT an LLM call — the chat
+    # handler falls back to reminders/insights data only when Q&A finds nothing.
+    return "question"

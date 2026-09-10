@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ToastProvider } from "@/components/ui/Toast";
 
 export const metadata: Metadata = {
-  title: "LifeOS Agent",
+  title: "LifeOS — AI Document Intelligence",
   description:
-    "Upload your documents. LifeOS reads them, tracks the deadlines, and answers your questions.",
+    "Turn your documents into actionable insights. AI classification, extraction, reminders, and document chat.",
 };
 
 export default function RootLayout({
@@ -14,7 +15,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <ToastProvider>{children}</ToastProvider>
+      </body>
     </html>
   );
 }

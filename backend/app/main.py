@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.routers import account, auth, chat, documents, insights, reminders
+from app.routers import account, auth, chat, documents, insights, notifications, reminders
 
 app = FastAPI(title="LifeOS Agent API", version="0.3.0")
 
@@ -38,6 +38,7 @@ app.include_router(chat.router)
 app.include_router(reminders.router)
 app.include_router(insights.router)
 app.include_router(account.router)
+app.include_router(notifications.router)
 
 # Web UI (Phase 1) — single-file React app served at /. Kept out of /docs' way.
 _WEB_INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
@@ -46,6 +47,16 @@ _WEB_INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
 @app.get("/", include_in_schema=False)
 def web_ui() -> FileResponse:
     return FileResponse(_WEB_INDEX)
+
+
+@app.on_event("startup")
+def _prewarm_embeddings() -> None:
+    """Warm the local embedding model off the request path so the FIRST RAG
+    query isn't slow (model lazy-loads several seconds on first use)."""
+    import threading
+    from app.services import embeddings
+
+    threading.Thread(target=embeddings.available, daemon=True).start()
 
 
 @app.get("/health")
