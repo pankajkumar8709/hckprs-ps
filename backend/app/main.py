@@ -14,13 +14,16 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.routers import auth, chat, documents
+from app.routers import account, auth, chat, documents, insights, reminders
 
-app = FastAPI(title="LifeOS Agent API", version="0.2.0")
+app = FastAPI(title="LifeOS Agent API", version="0.3.0")
 
 app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
+app.include_router(reminders.router)
+app.include_router(insights.router)
+app.include_router(account.router)
 
 # Web UI (Phase 1) — single-file React app served at /. Kept out of /docs' way.
 _WEB_INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"

@@ -20,3 +20,12 @@ email-validator==2.2.0
 pypdf==5.1.0
 google-generativeai==0.8.3
 groq==1.7.0
+# OCR fallback for scanned PDFs / images (F1.2). NOTE: these Python packages need
+# EXTERNAL binaries installed separately — Tesseract-OCR and Poppler. Without them
+# the OCR path degrades gracefully (text-layer PDFs still work).
+pytesseract==0.3.13
+pdf2image==1.17.0
+Pillow==11.0.0
+# Phase 2 F2.4 — local embeddings for pgvector RAG (Groq has no embeddings API).
+# Pulls in torch/transformers (heavy). Model: all-MiniLM-L6-v2 (384-dim).
+sentence-transformers

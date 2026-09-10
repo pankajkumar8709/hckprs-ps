@@ -21,12 +21,15 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from pgvector.sqlalchemy import Vector
 
 from app.database import Base
 
@@ -236,3 +239,28 @@ class AuditLog(Base, TimestampMixin):
     ip_address: Mapped[str | None] = mapped_column(String(64))
 
     __table_args__ = (Index("ix_audit_logs_user_id", "user_id"),)
+
+
+class DocumentChunk(Base, TimestampMixin):
+    """F2.4 — per-user, per-document text chunk + pgvector embedding for RAG.
+
+    Added in Phase 2 (migration 0002). embedding is 384-dim (all-MiniLM-L6-v2).
+    Every RAG query filters by user_id at the SQL level (Rule 4 / isolation).
+    """
+    __tablename__ = "document_chunks"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(384))
+
+    __table_args__ = (
+        Index("ix_document_chunks_user_id", "user_id"),
+        Index("ix_document_chunks_document_id", "document_id"),
+    )
