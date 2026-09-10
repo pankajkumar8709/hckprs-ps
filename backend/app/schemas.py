@@ -83,6 +83,11 @@ class ReminderUpdateRequest(BaseModel):
     status: str = Field(pattern="^(pending|done|dismissed)$")
 
 
+class ReminderCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=512)
+    due_date: datetime | None = None
+
+
 # ---------- Insights (F2.7) ----------
 class InsightResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

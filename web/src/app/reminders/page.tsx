@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { BellRing, CheckCircle2, FileText, CalendarPlus } from "lucide-react";
+import { BellRing, CheckCircle2, FileText, CalendarPlus, Plus, X } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
@@ -32,6 +32,10 @@ export default function RemindersPage() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"all" | "pending" | "completed">("all");
+  const [showForm, setShowForm] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newDate, setNewDate] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     try { setReminders(await api.listReminders()); }
@@ -39,6 +43,20 @@ export default function RemindersPage() {
     finally { setLoading(false); }
   }, [toast]);
   useEffect(() => { load(); }, [load]);
+
+  async function createTask(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newTitle.trim()) return;
+    setCreating(true);
+    try {
+      await api.createReminder(newTitle.trim(), newDate || null);
+      toast("Task created", "success");
+      setNewTitle(""); setNewDate(""); setShowForm(false);
+      await load();
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Could not create task", "error");
+    } finally { setCreating(false); }
+  }
 
   async function markDone(id: string) {
     try {
@@ -70,7 +88,29 @@ export default function RemindersPage() {
   return (
     <AppLayout title="Reminders">
       <div className="p-4 sm:p-6 max-w-4xl mx-auto">
-        <PageHeader title="Reminders" subtitle="Automatically created from dates in your documents" />
+        <PageHeader title="Reminders" subtitle="Automatically created from dates in your documents"
+          actions={<Button size="md" onClick={() => setShowForm((v) => !v)}><Plus size={16} /> New Task</Button>} />
+
+        {showForm && (
+          <form onSubmit={createTask} className="mb-6 bg-surface border border-border rounded-2xl shadow-card p-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-end animate-fade-up">
+            <div className="flex-1">
+              <label htmlFor="task-title" className="block text-xs text-body mb-1">Task</label>
+              <input id="task-title" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} required
+                placeholder="e.g. Renew car insurance"
+                className="w-full rounded-xl bg-canvas border border-border px-3 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-ring" />
+            </div>
+            <div>
+              <label htmlFor="task-date" className="block text-xs text-body mb-1">Due date (optional)</label>
+              <input id="task-date" type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)}
+                className="rounded-xl bg-canvas border border-border px-3 py-2.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-ring" />
+            </div>
+            <div className="flex gap-2">
+              <Button type="submit" size="md" disabled={creating}>{creating ? "Adding…" : "Add task"}</Button>
+              <Button type="button" variant="ghost" size="md" onClick={() => setShowForm(false)}><X size={16} /></Button>
+            </div>
+          </form>
+        )}
+
         <div className="flex gap-2 mb-6">
           {(["all", "pending", "completed"] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)}
