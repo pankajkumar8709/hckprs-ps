@@ -6,7 +6,10 @@ API contract. Phase 2 (F2.1+) builds on top of these.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import Depends, FastAPI
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -18,6 +21,14 @@ app = FastAPI(title="LifeOS Agent API", version="0.2.0")
 app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
+
+# Web UI (Phase 1) — single-file React app served at /. Kept out of /docs' way.
+_WEB_INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
+
+
+@app.get("/", include_in_schema=False)
+def web_ui() -> FileResponse:
+    return FileResponse(_WEB_INDEX)
 
 
 @app.get("/health")
