@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -17,6 +18,19 @@ from app.database import get_db
 from app.routers import account, auth, chat, documents, insights, reminders
 
 app = FastAPI(title="LifeOS Agent API", version="0.3.0")
+
+# CORS — allow the Next.js dev frontend (localhost:3000) to call the API.
+# Frontend-only enablement (no new endpoints). Tighten allow_origins in prod.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(auth.router)
 app.include_router(documents.router)
