@@ -193,4 +193,102 @@ export const api = {
   listConversations: () => request<Conversation[]>("/chat/conversations"),
   getMessages: (conversationId: string) =>
     request<ChatMessage[]>(`/chat/conversations/${conversationId}/messages`),
+  deleteConversation: (conversationId: string) =>
+    request<void>(`/chat/conversations/${conversationId}`, { method: "DELETE" }),
+  clearConversations: () =>
+    request<void>("/chat/conversations", { method: "DELETE" }),
+
+  // Account / Premium (F2.9) — existing backend endpoints
+  getPlan: () => request<PlanInfo>("/account/plan"),
+  upgrade: () => request<PlanInfo>("/account/upgrade", { method: "POST" }),
+
+  // Notifications (derived from reminders + insights)
+  getNotifications: () => request<{ items: NotificationItem[]; count: number }>("/notifications"),
 };
+
+/** Fetch a reminder's .ics (auth-protected) and trigger a browser download. */
+export async function downloadReminderIcs(reminderId: string, filename = "reminder.ics", alarmDays = 7): Promise<void> {
+  const BASE_URL = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+  const t = getToken();
+  const res = await fetch(`${BASE_URL}/reminders/${reminderId}/calendar.ics?alarm_days=${alarmDays}`, {
+    headers: t ? { Authorization: `Bearer ${t}` } : {},
+  });
+  if (!res.ok) throw new ApiError(res.status, "Could not generate calendar file");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export interface NotificationItem {
+  id: string;
+  kind: "reminder" | "insight";
+  title: string;
+  message: string;
+  severity: string;
+  link: string;
+  created_at: string;
+  sort_ts: string;
+}
+
+export interface PlanInfo {
+  plan_tier: string;
+  document_limit: number | null;
+}
+
+/** Streaming chat: reads SSE, calls onMeta once, onDelta per chunk, resolves on done.
+ *  Falls back cleanly on error. Uses the same auth as the rest of the client. */
+export async function chatStream(
+  message: string,
+  conversation_id: string | undefined,
+  handlers: {
+    onMeta?: (m: { conversation_id: string; intent: string; citations: { document_id: string; filename: string }[] }) => void;
+    onDelta?: (text: string) => void;
+    onDone?: () => void;
+    onError?: (msg: string) => void;
+  }
+): Promise<void> {
+  const BASE_URL = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+  const t = getToken();
+  try {
+    const res = await fetch(`${BASE_URL}/chat/stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(t ? { Authorization: `Bearer ${t}` } : {}),
+      },
+      body: JSON.stringify({ message, conversation_id: conversation_id ?? null }),
+    });
+    if (res.status === 401) { clearTokens(); handlers.onError?.("Session expired. Please log in again."); return; }
+    if (!res.ok || !res.body) { handlers.onError?.(`Request failed (${res.status})`); return; }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+      for (const evt of events) {
+        const lines = evt.split("\n");
+        const type = lines.find((l) => l.startsWith("event:"))?.slice(6).trim();
+        const dataLine = lines.find((l) => l.startsWith("data:"))?.slice(5).trim();
+        if (!dataLine) continue;
+        const data = JSON.parse(dataLine);
+        if (type === "meta") handlers.onMeta?.(data);
+        else if (type === "delta") handlers.onDelta?.(data.text);
+        else if (type === "done") handlers.onDone?.();
+      }
+    }
+    handlers.onDone?.();
+  } catch (e) {
+    handlers.onError?.("The assistant is temporarily unavailable. Please try again.");
+  }
+}

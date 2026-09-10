@@ -50,7 +50,7 @@ def index_document(
 
 
 def search(
-    db: Session, user_id: uuid.UUID, query: str, k: int = 5
+    db: Session, user_id: uuid.UUID, query: str, k: int = 4
 ) -> tuple[str, list[dict]]:
     """User-scoped similarity search. Returns (context_text, citations).
 

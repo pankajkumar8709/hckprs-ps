@@ -7,6 +7,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -14,6 +15,7 @@ from app.deps import get_current_user
 from app.models import Reminder, User
 from app.schemas import ReminderResponse, ReminderUpdateRequest
 from app.services.insights import regenerate_insights
+from app.services.ics import reminder_to_ics, safe_filename
 
 router = APIRouter(prefix="/reminders", tags=["reminders"])
 
@@ -55,3 +57,28 @@ def update_reminder(
     # F2.7 — insights depend on pending reminders; refresh after a status change.
     regenerate_insights(db, current_user.id)
     return reminder
+
+
+@router.get("/{reminder_id}/calendar.ics")
+def reminder_ics(
+    reminder_id: uuid.UUID,
+    alarm_days: int = Query(default=7, ge=0, le=60),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Download an .ics for this reminder with an alarm `alarm_days` before the
+    due date, so the user's calendar notifies them ahead of the deadline."""
+    reminder = (
+        db.query(Reminder)
+        .filter(Reminder.id == reminder_id, Reminder.user_id == current_user.id)  # RULE 4
+        .first()
+    )
+    if reminder is None:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    ics = reminder_to_ics(reminder, alarm_days_before=alarm_days)
+    fname = safe_filename(reminder.title)
+    return Response(
+        content=ics,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
