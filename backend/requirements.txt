@@ -10,6 +10,12 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
 passlib[bcrypt]==1.7.4
+# passlib 1.7.4 is incompatible with bcrypt 5.x (reads removed __about__);
+# pin to the 4.0.x line it supports.
+bcrypt==4.0.1
 python-jose[cryptography]==3.3.0
 python-multipart==0.0.9
 email-validator==2.2.0
+# Phase 1 MVP additions
+pypdf==5.1.0
+google-generativeai==0.8.3

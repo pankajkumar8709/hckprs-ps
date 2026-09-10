@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     JWT_ACCESS_EXPIRE_MIN: int = 15
     JWT_REFRESH_EXPIRE_DAYS: int = 7
     LLM_API_KEY: str = ""
+    LLM_MODEL: str = "gemini-flash-latest"
     STORAGE_BACKEND: str = "local"
     S3_BUCKET: str = ""
     REDIS_URL: str = ""

@@ -1,8 +1,8 @@
-"""FastAPI application entrypoint (Section 0).
+"""FastAPI application entrypoint.
 
-Only /health exists at Section 0. Feature routers are added per the build order
-starting at F2.1. /health checks DB reachability — the connection proof for
-Section 0's definition of done, and the basis for F3.10 observability.
+Section 0 shipped /health. Phase 1 MVP adds auth, documents (upload -> pypdf text
+extraction -> single-shot Gemini extraction -> Q&A) and chat routers, per the 0.4
+API contract. Phase 2 (F2.1+) builds on top of these.
 """
 from __future__ import annotations
 
@@ -11,8 +11,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.routers import auth, chat, documents
 
-app = FastAPI(title="LifeOS Agent API", version="0.1.0")
+app = FastAPI(title="LifeOS Agent API", version="0.2.0")
+
+app.include_router(auth.router)
+app.include_router(documents.router)
+app.include_router(chat.router)
 
 
 @app.get("/health")
