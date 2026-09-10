@@ -24,6 +24,7 @@ from app.schemas import (
     MessageResponse,
 )
 from app.services import llm, rag
+from app.services.insights import regenerate_insights
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -76,6 +77,36 @@ def _reminders_summary(db: Session, user_id: uuid.UUID) -> str:
     return "\n".join(lines)
 
 
+def _create_tasks_action(db: Session, user_id: uuid.UUID, message: str) -> str:
+    """Multi-step AI action: understand the request -> extract task(s) -> create
+    Reminder rows -> refresh insights -> confirm. Returns a confirmation string."""
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    tasks = llm.extract_task_request(message, today)
+    if not tasks:
+        return ("I couldn't identify a task to create. Try: \"Remind me to renew "
+                "insurance on 2027-01-28\" or \"Add a task: call the bank next Friday\".")
+    created = []
+    for t in tasks:
+        due = None
+        if t.get("due_date"):
+            try:
+                due = datetime.strptime(t["due_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except ValueError:
+                due = None
+        r = Reminder(user_id=user_id, document_id=None, title=t["title"],
+                     due_date=due, status="pending")
+        db.add(r)
+        created.append((t["title"], t.get("due_date")))
+    db.commit()
+    regenerate_insights(db, user_id)
+    lines = [f"Done — I created {len(created)} task(s) for you:"]
+    for title, dd in created:
+        lines.append(f"- **{title}**" + (f" (due {dd})" if dd else ""))
+    lines.append("\nYou can see and manage them on the Reminders page.")
+    return "\n".join(lines)
+
+
 @router.post("", response_model=ChatResponse)
 def chat(
     body: ChatRequest,
@@ -125,6 +156,8 @@ def chat(
         # about a deadline that lives in a document, not a reminder row).
         if not summary.startswith("You have no pending reminders"):
             answer = summary
+    elif intent == "create_task":
+        answer = _create_tasks_action(db, current_user.id, body.message)
     elif intent == "upload_help":
         answer = ("To add a document, use the upload panel (or POST /documents/"
                   "upload). PDF, TXT, MD and images are supported.")
@@ -195,6 +228,8 @@ def chat_stream(
         summary = _reminders_summary(db, current_user.id)
         if not summary.startswith("You have no pending reminders"):
             canned = summary
+    elif intent == "create_task":
+        canned = _create_tasks_action(db, current_user.id, body.message)
     elif intent == "upload_help":
         canned = ("To add a document, use the upload panel (or POST /documents/"
                   "upload). PDF, TXT, MD and images are supported.")

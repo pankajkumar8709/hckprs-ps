@@ -15,7 +15,7 @@ interface Bubble {
 
 const SUGGESTIONS = [
   "What deadlines are near?",
-  "Show my upcoming reminders",
+  "Remind me to renew insurance next Friday",
   "What is my insurance renewal date?",
   "Are there any conflicts?",
 ];

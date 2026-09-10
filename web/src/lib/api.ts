@@ -177,6 +177,8 @@ export const api = {
   // Reminders
   listReminders: (status?: string) =>
     request<Reminder[]>(`/reminders${status ? `?status=${status}` : ""}`),
+  createReminder: (title: string, due_date?: string | null) =>
+    request<Reminder>("/reminders", { method: "POST", body: { title, due_date: due_date ?? null } }),
   updateReminder: (id: string, status: "pending" | "done" | "dismissed") =>
     request<Reminder>(`/reminders/${id}`, { method: "PATCH", body: { status } }),
 

@@ -429,7 +429,7 @@ When in doubt between question and show_reminders, choose question.
 MESSAGE: {message}
 INTENT:"""
 
-_VALID_INTENTS = {"question", "show_reminders", "show_insights", "upload_help", "general"}
+_VALID_INTENTS = {"question", "show_reminders", "show_insights", "upload_help", "general", "create_task"}
 
 
 def route_intent(message: str) -> str:
@@ -450,6 +450,11 @@ def route_intent(message: str) -> str:
                   "clashing", "renewal risk", "cross-document")
     upload_kw = ("how do i upload", "how to upload", "how do i add a document",
                  "how to add a document")
+    create_kw = ("remind me", "add a reminder", "add a task", "create a task",
+                 "create a reminder", "set a reminder", "add task", "new task",
+                 "add to my tasks", "add to my reminders")
+    if any(k in m for k in create_kw):
+        return "create_task"
     if any(k in m for k in upload_kw):
         return "upload_help"
     if any(k in m for k in reminder_kw):
@@ -460,3 +465,40 @@ def route_intent(message: str) -> str:
     # Everything else is treated as a question WITHOUT an LLM call — the chat
     # handler falls back to reminders/insights data only when Q&A finds nothing.
     return "question"
+
+
+_TASK_PROMPT = """Extract the task/reminder(s) the user wants to create from their
+message. Return ONLY a JSON object:
+{{"tasks": [{{"title": str, "due_date": "YYYY-MM-DD or null"}}]}}
+Today's date is {today}. Resolve relative dates ("next friday", "in 3 days",
+"end of month") to an absolute YYYY-MM-DD. If no date is given, use null. Keep
+each title short and action-oriented. Return an empty list if there is no task.
+
+MESSAGE: {message}
+JSON:"""
+
+
+def extract_task_request(message: str, today: str) -> list[dict]:
+    """Multi-step action helper: parse a create-task request into structured
+    tasks [{title, due_date}]. Resilient: [] on any failure."""
+    if not _configured():
+        return []
+    try:
+        raw = _generate(_TASK_PROMPT.format(today=today, message=message[:1000]))
+    except Exception:
+        return []
+    data = _loads_json(raw)
+    if not isinstance(data, dict):
+        return []
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list):
+        return []
+    out = []
+    for t in tasks:
+        if isinstance(t, dict) and t.get("title"):
+            dd = t.get("due_date")
+            out.append({
+                "title": str(t["title"])[:512],
+                "due_date": dd if isinstance(dd, str) and dd.lower() != "null" else None,
+            })
+    return out[:10]

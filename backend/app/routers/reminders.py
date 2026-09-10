@@ -13,11 +13,32 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Reminder, User
-from app.schemas import ReminderResponse, ReminderUpdateRequest
+from app.schemas import ReminderCreateRequest, ReminderResponse, ReminderUpdateRequest
 from app.services.insights import regenerate_insights
 from app.services.ics import reminder_to_ics, safe_filename
 
 router = APIRouter(prefix="/reminders", tags=["reminders"])
+
+
+@router.post("", response_model=ReminderResponse, status_code=201)
+def create_reminder(
+    body: ReminderCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Reminder:
+    """Manual task/reminder creation (user-authored, not document-derived)."""
+    reminder = Reminder(
+        user_id=current_user.id,  # RULE 4
+        document_id=None,
+        title=body.title,
+        due_date=body.due_date,
+        status="pending",
+    )
+    db.add(reminder)
+    db.commit()
+    db.refresh(reminder)
+    regenerate_insights(db, current_user.id)  # a new dated task may create a clash
+    return reminder
 
 
 @router.get("", response_model=list[ReminderResponse])
