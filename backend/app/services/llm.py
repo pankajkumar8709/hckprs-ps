@@ -1,12 +1,15 @@
-"""LLM client — Phase 1 MVP single-shot extraction + Q&A via Gemini.
+"""LLM client — Phase 1 MVP single-shot extraction + Q&A.
 
-The plan's stack names CrewAI, but that is a Phase 2 concern (F2.1/F2.2). For the
-MVP we make ONE direct model call for extraction and one for Q&A, behind a thin
+Provider-switched: works with Groq (OpenAI-compatible, fast) or Gemini. The
+plan's stack names CrewAI, but that is a Phase 2 concern (F2.1/F2.2). For the MVP
+we make ONE direct model call for extraction and one for Q&A, behind a thin
 interface so swapping to a CrewAI crew later is localized.
 
+Provider selection (LLM_PROVIDER): 'auto' (default) picks Groq when the key looks
+like a Groq key (gsk_...), else Gemini. Force with 'groq' or 'gemini'.
+
 If LLM_API_KEY is unset (e.g. in tests/CI), calls degrade gracefully: extraction
-returns [] and chat returns a canned 'LLM not configured' answer, so the upload
-and chat flows still work end-to-end without a live key.
+returns [] and chat returns a canned 'LLM not configured' answer.
 """
 from __future__ import annotations
 
@@ -15,9 +18,23 @@ import re
 
 from app.config import settings
 
-# Default to the stable 'latest' alias so the model name doesn't rot; override
-# via LLM_MODEL in .env. (gemini-1.5-flash was retired on public v1beta.)
-_MODEL = getattr(settings, "LLM_MODEL", None) or "gemini-flash-latest"
+# Request timeout (seconds) — fail fast instead of the SDK's minutes-long retry.
+_TIMEOUT = 30
+
+
+def _provider() -> str:
+    p = (settings.LLM_PROVIDER or "auto").lower()
+    if p in ("groq", "gemini"):
+        return p
+    # auto-detect from key shape
+    return "groq" if settings.LLM_API_KEY.startswith("gsk_") else "gemini"
+
+
+def _model() -> str:
+    if settings.LLM_MODEL:
+        return settings.LLM_MODEL
+    return ("openai/gpt-oss-120b" if _provider() == "groq"
+            else "gemini-flash-latest")
 
 
 def _configured() -> bool:
@@ -25,14 +42,34 @@ def _configured() -> bool:
 
 
 def _generate(prompt: str) -> str:
-    """Single text-in/text-out call to Gemini. Returns '' if not configured."""
+    """Single text-in/text-out call to the configured provider. '' if not configured."""
     if not _configured():
         return ""
+    if _provider() == "groq":
+        return _generate_groq(prompt)
+    return _generate_gemini(prompt)
+
+
+def _generate_groq(prompt: str) -> str:
+    from groq import Groq
+
+    client = Groq(api_key=settings.LLM_API_KEY, timeout=_TIMEOUT, max_retries=1)
+    resp = client.chat.completions.create(
+        model=_model(),
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
+def _generate_gemini(prompt: str) -> str:
     import google.generativeai as genai
 
     genai.configure(api_key=settings.LLM_API_KEY)
-    model = genai.GenerativeModel(_MODEL)
-    resp = model.generate_content(prompt)
+    model = genai.GenerativeModel(_model())
+    resp = model.generate_content(
+        prompt, request_options={"timeout": _TIMEOUT}
+    )
     return (resp.text or "").strip()
 
 

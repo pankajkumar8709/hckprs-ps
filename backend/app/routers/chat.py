@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Conversation, ExtractedField, Message, User
+from app.models import Conversation, Document, ExtractedField, Message, User
 from app.schemas import (
     ChatRequest,
     ChatResponse,
@@ -34,11 +34,27 @@ def _build_context(db: Session, user_id: uuid.UUID) -> str:
         .limit(100)
         .all()
     )
-    if not fields:
-        return ""
-    return "\n".join(
-        f"- {f.field_name} ({f.field_type}): {f.field_value}" for f in fields
+    parts: list[str] = []
+    if fields:
+        parts.append("Extracted fields from the user's documents:")
+        parts.extend(
+            f"- {f.field_name} ({f.field_type}): {f.field_value}" for f in fields
+        )
+
+    # Fall back to (and augment with) the raw document text so ANY uploaded
+    # document is answerable, not just those with financial-style fields.
+    docs = (
+        db.query(Document)
+        .filter(Document.user_id == user_id)  # RULE 4
+        .order_by(Document.created_at.desc())
+        .limit(5)
+        .all()
     )
+    for d in docs:
+        if d.ocr_text:
+            parts.append(f"\n--- Document: {d.filename} ---\n{d.ocr_text[:6000]}")
+
+    return "\n".join(parts).strip()
 
 
 @router.post("", response_model=ChatResponse)

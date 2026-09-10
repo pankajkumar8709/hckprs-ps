@@ -23,10 +23,12 @@ These choices must not change mid-build. If your AI agent starts writing code an
 |---|---|
 | Backend framework | FastAPI (Python 3.11+) |
 | Agent orchestration | CrewAI |
+| LLM | **Gemini** via `google-generativeai`, model set by `LLM_MODEL` env var (default `gemini-flash-latest`) — verify your API key's live models before assuming an exact model name, older aliases get retired |
+| Text extraction | **pypdf** for text-layer PDFs (implemented Phase 1). OCR (scanned/image PDFs) is a pluggable interface (`app/services/pdf_ocr.py`) — not yet implemented, add when a real scanned document is needed |
 | Primary DB | PostgreSQL on **Supabase** (free tier — no local Postgres install needed) |
 | Vector store | **pgvector, enabled on the same Supabase Postgres project** (no separate vector DB service) |
 | Object storage | Local disk for hackathon / S3-compatible (Render/Railway disk or Cloudflare R2) for deployed version |
-| Auth | JWT (access + refresh token), passwords hashed with bcrypt via `passlib` |
+| Auth | JWT (access + refresh token), passwords hashed with bcrypt via `passlib`. **Pin `bcrypt==4.0.1`** — passlib 1.7.4 breaks on bcrypt 5.x |
 | Background jobs | `FastAPI BackgroundTasks` for Phase 2 → upgrade to Celery + Redis in Phase 3 |
 | Android | Kotlin, Jetpack Compose, Retrofit + OkHttp, Hilt for DI, Room for local cache |
 | Web (optional) | Next.js hitting the same FastAPI endpoints |
@@ -112,8 +114,102 @@ REDIS_URL=            # Phase 3 only
 RATE_LIMIT_PER_MIN=60
 ```
 
-### 0.6 Assumed starting point
-This plan assumes Phase 1 (MVP) is already working: single-document upload → OCR → single-shot LLM extraction → basic Q&A, per the earlier Round-1 plan. Everything below builds on top of that.
+### 0.6 Starting point
+Section 0 (repo structure, tech stack, data model, API contract) is set up first, then Phase 1 (below) is built and fully tested before Phase 2 begins.
+
+---
+
+## PHASE 1 — MVP / POC
+
+Goal: prove the core loop works end-to-end — upload a document, get it understood, ask a question about it. Deliberately narrow scope: one document type, no auth polish, no multi-agent orchestration, no vector search yet. Everything here gets replaced/extended in Phase 2 — build it simple and working, not future-proof.
+
+### F1.1 — Project skeleton
+**Backend**
+```
+backend/
+  main.py
+  routers/
+    documents.py      # POST /documents/upload, GET /documents/{id}
+    query.py          # POST /query {question, user_id}
+  services/
+    extraction.py       # single LLM call, structured JSON out
+    ocr.py               # pdfplumber / pytesseract wrapper
+  db/
+    models.py            # User, Document, ExtractedField (from Section 0.3)
+    session.py
+```
+- Connect to the Supabase Postgres instance from Section 0.5, create the core tables from Section 0.3 (a subset is enough for now: `User`, `Document`, `ExtractedField`).
+- One hardcoded/seeded test user is fine at this stage — full auth comes in F3.1.
+
+**Android**
+```
+android/
+  MainActivity.kt
+  ui/
+    upload/UploadScreen.kt   # file picker + upload button
+    query/QueryScreen.kt     # text box for one question, shows answer
+  data/ApiService.kt         # Retrofit interface
+```
+Single Activity, no navigation drawer yet, no chat UI yet — that's F2.5.
+
+**Test checklist**
+- [ ] Backend starts and connects to Supabase without errors.
+- [ ] Android app builds and runs on an emulator/device, hitting the local (or deployed) backend URL.
+
+**Definition of done**: empty skeleton runs end-to-end — app opens, backend responds to a health check.
+
+---
+
+### F1.2 — Single document upload + OCR
+**Backend**
+- `POST /documents/upload`: accept a PDF/image, save to local disk (or Supabase storage), run OCR (`pytesseract` for images, `pdfplumber`/`PyMuPDF` for text-based PDFs — try text extraction first, fall back to OCR only if the PDF has no extractable text layer), store raw text on the `Document.ocr_text` field, set `upload_status`.
+
+**Android**
+- `UploadScreen.kt`: file picker (system picker intent), upload button, simple status text (uploading/done/failed).
+
+**Test checklist**
+- [ ] Upload a clean text-based PDF; confirm `ocr_text` is populated correctly.
+- [ ] Upload a scanned/image-based PDF; confirm OCR fallback kicks in and still extracts readable text.
+- [ ] Upload a corrupted/non-PDF file; confirm it fails gracefully with a clear status, not a crash.
+
+**Definition of done**: any real PDF (even a messy scanned one) uploaded from the Android app produces stored OCR text on the backend.
+
+---
+
+### F1.3 — Single-shot extraction (fixed schema)
+**Backend**
+- `services/extraction.py`: one LLM call — input is `ocr_text`, output is a fixed JSON schema: `{doc_type, key_dates: [], amounts: [], parties: [], summary}`. No agents yet, no per-type templates — that's F2.1/F2.2.
+- Parse and store as `ExtractedField` rows linked to the `Document`.
+
+**Test checklist**
+- [ ] Run extraction on 2–3 different real document types (even though schema is generic); confirm reasonable, non-empty output for each.
+- [ ] Confirm malformed LLM output (e.g., broken JSON) is caught and retried or fails visibly, not silently stored as garbage.
+
+**Definition of done**: uploading a document automatically produces a readable extracted summary + key fields, stored and retrievable via `GET /documents/{id}`.
+
+---
+
+### F1.4 — Basic Q&A (no vector search yet)
+**Backend**
+- `POST /query {question, user_id}`: for the MVP, skip vector search entirely — just pass the target document's `ocr_text` + extracted JSON directly into the prompt along with the question. This is intentionally the "dumb but working" version; F2.4 replaces it with real per-user-scoped RAG.
+
+**Android**
+- `QueryScreen.kt`: text input for a question, displays the returned answer.
+
+**Test checklist**
+- [ ] Ask a factual question about an uploaded document ("what's the deposit amount?"); confirm a correct answer.
+- [ ] Ask something not present in the document; confirm it says so rather than inventing an answer.
+
+**Definition of done**: a user can upload a document and immediately ask a real question about it and get a correct answer, fully working in the Android app, no shortcuts hidden behind a Postman call.
+
+---
+
+### F1.5 — Phase 1 demo checkpoint
+Before moving to Phase 2, do one full run-through exactly as you would for judges: open the app cold, upload a real messy document, watch it process, ask one question, get a correct answer. This is your baseline "does the core idea even work" proof — if this isn't solid, fixing it now is far cheaper than discovering it's broken while you're also mid-way through Phase 2 features.
+
+**Test checklist**
+- [ ] Full cold-start demo run completes without any manual backend intervention (no re-running scripts, no DB fixes by hand).
+- [ ] Timing is reasonable — upload-to-answer under ~15s; if slower, note it now, since Phase 2's async work (F3.9) is the eventual fix, not something to rush into early.
 
 ---
 
@@ -288,12 +384,14 @@ This plan assumes Phase 1 (MVP) is already working: single-document upload → O
 **Test checklist**
 - [ ] Full upload → extract → reminder → chat flow works against the deployed URL, not just localhost.
 - [ ] APK installs and runs on a second physical/demo phone, not just your dev machine.
+- [ ] Confirm `/health` responds even after 20+ minutes of no traffic (proves the warm-up ping is actually working before your first evaluation round).
 
 ---
 
 ## PHASE 3 — Productionize & Secure
 
 ### F3.1 — Full auth hardening
+**Note: JWT auth, bcrypt hashing, and `get_current_user` were already built during Phase 1 (ahead of the original plan). Treat this section as an audit against the checklist below, not a rebuild — only fill actual gaps.**
 - Real JWT issuance on `/auth/login`, refresh flow on `/auth/refresh`, bcrypt password hashing, minimum password rules.
 - Every protected endpoint uses a FastAPI dependency (`get_current_user`) — centralize this in one place so it can't be forgotten on a new endpoint.
 
@@ -423,6 +521,6 @@ Write these as real files, not an afterthought — the rubric explicitly asks fo
 
 ## Build order summary (the single sequence to follow, top to bottom)
 
-Section 0 (lock decisions) → F2.1 → F2.2 → F2.3 → F2.4 → F2.5 → F2.6 → F2.7 → F2.8 → F2.9 → F2.10 (deploy — **Round 2 checkpoint**) → F3.1 → F3.2 → F3.3 → F3.4 → F3.5 → F3.6 → F3.7 → F3.8 → F3.9 → F3.10 → F3.11 → F3.12 (**Round 3 / final checkpoint**) → Advanced features in the priority order above, only if time remains.
+Section 0 (lock decisions) → F1.1 → F1.2 → F1.3 → F1.4 → F1.5 (**Phase 1 / early checkpoint**) → F2.1 → F2.2 → F2.3 → F2.4 → F2.5 → F2.6 → F2.7 → F2.8 → F2.9 → F2.10 (deploy — **Round 2 checkpoint**) → F3.1 → F3.2 → F3.3 → F3.4 → F3.5 → F3.6 → F3.7 → F3.8 → F3.9 → F3.10 → F3.11 → F3.12 (**Round 3 / final checkpoint**) → Advanced features in the priority order above, only if time remains.
 
 Never reorder F3.2 later than this — isolation must be built and tested before you add anything else in Phase 3, because every subsequent feature (sharing, deletion, audit logging) depends on it being correct.
