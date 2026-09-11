@@ -8,6 +8,8 @@ venv/
 # Secrets — never commit (F3.12)
 .env
 backend/.env
+.kiro
+
 
 # Local storage
 backend/storage/
