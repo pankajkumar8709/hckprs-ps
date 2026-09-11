@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import JWTError
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from app.security import (
     hash_password,
     verify_password,
 )
+from app.services.audit import log_audit, LOGIN
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -51,10 +52,12 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)) -> User:
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
     user = db.query(User).filter(User.email == body.email).first()
     if user is None or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    log_audit(db, user.id, LOGIN,
+              ip_address=(request.client.host if request.client else None))
     return _tokens(user.id)
 
 

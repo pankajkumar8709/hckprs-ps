@@ -16,6 +16,7 @@ from app.models import Reminder, User
 from app.schemas import ReminderCreateRequest, ReminderResponse, ReminderUpdateRequest
 from app.services.insights import regenerate_insights
 from app.services.ics import reminder_to_ics, safe_filename
+from app.services.scoped import scoped_get
 
 router = APIRouter(prefix="/reminders", tags=["reminders"])
 
@@ -65,13 +66,8 @@ def update_reminder(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Reminder:
-    reminder = (
-        db.query(Reminder)
-        .filter(Reminder.id == reminder_id, Reminder.user_id == current_user.id)  # RULE 4
-        .first()
-    )
-    if reminder is None:
-        raise HTTPException(status_code=404, detail="Reminder not found")
+    reminder = scoped_get(db, Reminder, reminder_id, current_user.id,
+                          not_found_detail="Reminder not found")
     reminder.status = body.status
     db.commit()
     db.refresh(reminder)
@@ -89,13 +85,8 @@ def reminder_ics(
 ) -> Response:
     """Download an .ics for this reminder with an alarm `alarm_days` before the
     due date, so the user's calendar notifies them ahead of the deadline."""
-    reminder = (
-        db.query(Reminder)
-        .filter(Reminder.id == reminder_id, Reminder.user_id == current_user.id)  # RULE 4
-        .first()
-    )
-    if reminder is None:
-        raise HTTPException(status_code=404, detail="Reminder not found")
+    reminder = scoped_get(db, Reminder, reminder_id, current_user.id,
+                          not_found_detail="Reminder not found")
     ics = reminder_to_ics(reminder, alarm_days_before=alarm_days)
     fname = safe_filename(reminder.title)
     return Response(
