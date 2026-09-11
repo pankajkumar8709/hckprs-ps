@@ -14,6 +14,9 @@ passlib[bcrypt]==1.7.4
 # pin to the 4.0.x line it supports.
 bcrypt==4.0.1
 python-jose[cryptography]==3.3.0
+# F3.3 — Fernet encryption at rest (storage.py). Pinned explicitly rather than
+# relying on it transitively via python-jose[cryptography].
+cryptography==50.0.1
 python-multipart==0.0.9
 email-validator==2.2.0
 # Phase 1 MVP additions
@@ -31,3 +34,5 @@ Pillow==11.0.0
 sentence-transformers
 # Phase 3 — testing (F3.2 isolation suite)
 pytest==8.3.3
+# Phase 3 F3.4 — rate limiting & API abuse protection.
+slowapi==0.1.9
