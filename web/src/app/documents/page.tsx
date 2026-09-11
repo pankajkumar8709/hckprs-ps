@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
   FileText, UploadCloud, Search, Trash2, Share2, X, BellRing,
-  Sparkles, ChevronRight, CheckCircle2, Clock,
+  Sparkles, ChevronRight, CheckCircle2, Clock, Download,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -13,7 +13,7 @@ import { CardSkeleton, StatSkeleton } from "@/components/ui/Skeleton";
 import { StatCard, AgentTrace } from "@/components/domain";
 import { useToast } from "@/components/ui/Toast";
 import {
-  api, ApiError, type DocumentSummary, type DocumentDetail, type Reminder, type Insight,
+  api, ApiError, downloadDocument, type DocumentSummary, type DocumentDetail, type Reminder, type Insight,
 } from "@/lib/api";
 
 const FILTERS = ["all", "lease", "insurance", "loan_emi", "subscription", "medical", "other"];
@@ -91,6 +91,12 @@ export default function DocumentsPage() {
       toast("Document deleted", "success");
       await load();
     } catch (err) { toast(err instanceof ApiError ? err.message : "Delete failed", "error"); }
+  }
+  async function dl(id: string, filename: string) {
+    try {
+      toast("Preparing secure download…", "info");
+      await downloadDocument(id, filename);   // F3.3: mint signed URL -> fetch encrypted file
+    } catch (err) { toast(err instanceof ApiError ? err.message : "Download failed", "error"); }
   }
   async function share() {
     if (!selected || !shareEmail) return;
@@ -268,7 +274,8 @@ export default function DocumentsPage() {
                 <Button size="sm" variant="secondary" onClick={share}><Share2 size={15} /> Share</Button>
               </div>
 
-              <div className="mt-8">
+              <div className="mt-8 flex items-center gap-2">
+                <Button variant="secondary" size="sm" onClick={() => dl(selected.id, selected.filename)}><Download size={15} /> Download</Button>
                 <Button variant="danger" size="sm" onClick={() => del(selected.id)}><Trash2 size={15} /> Delete document</Button>
               </div>
             </div>
