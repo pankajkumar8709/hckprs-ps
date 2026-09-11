@@ -204,6 +204,11 @@ export const api = {
   getPlan: () => request<PlanInfo>("/account/plan"),
   upgrade: () => request<PlanInfo>("/account/upgrade", { method: "POST" }),
 
+  // F3.7 — the user's own audit trail (login, doc access/upload/delete, shares).
+  getAuditLog: () => request<AuditLogEntry[]>("/account/audit-log"),
+  // F3.8 — right-to-be-forgotten: hard-delete the account and ALL its data.
+  deleteAccount: () => request<void>("/account", { method: "DELETE" }),
+
   // Notifications (derived from reminders + insights)
   getNotifications: () => request<{ items: NotificationItem[]; count: number }>("/notifications"),
 };
@@ -241,6 +246,42 @@ export interface NotificationItem {
 export interface PlanInfo {
   plan_tier: string;
   document_limit: number | null;
+}
+
+/** F3.7 — one row of the user's audit trail. */
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+/** F3.3 — secure download: mint a short-lived signed URL, then fetch the
+ *  encrypted file through it (decrypted server-side) and trigger a browser
+ *  save. The file route is opened only by the signed token, never a static path. */
+export async function downloadDocument(documentId: string, filename = "document"): Promise<void> {
+  const BASE_URL = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+  const t = getToken();
+  // 1) mint the signed URL (auth + ownership checked here)
+  const minted = await request<{ url: string; expires_in: number }>(
+    `/documents/${documentId}/download-url`
+  );
+  // 2) fetch the file via the signed URL (token carries the capability)
+  const res = await fetch(`${BASE_URL}${minted.url}`, {
+    headers: t ? { Authorization: `Bearer ${t}` } : {},
+  });
+  if (!res.ok) throw new ApiError(res.status, "Download link expired or invalid");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 /** Streaming chat: reads SSE, calls onMeta once, onDelta per chunk, resolves on done.

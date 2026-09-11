@@ -4,7 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard, FileText, Bell, Sparkles, MessageSquare,
-  Users2, Crown, LogOut, ChevronLeft, X,
+  Users2, Crown, LogOut, ChevronLeft, X, Settings,
 } from "lucide-react";
 import { logout } from "@/lib/auth";
 import { api } from "@/lib/api";
@@ -26,6 +26,7 @@ const navUnique = [
   { href: "/insights", label: "Insights", icon: Sparkles },
   { href: "/chat", label: "AI Assistant", icon: MessageSquare },
   { href: "/shared", label: "Shared with me", icon: Users2 },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar({
@@ -96,7 +97,7 @@ export function Sidebar({
       <div className="p-3 border-t border-border space-y-2">
         {plan !== "premium" && !collapsed && (
           <Link
-            href="/chat"
+            href="/pricing"
             onClick={() => setMobileOpen(false)}
             className="block rounded-xl p-3 bg-brand-gradient text-white"
           >
