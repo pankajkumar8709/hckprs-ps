@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,9 @@ from app.services import llm, rag, storage
 from app.services.pdf_ocr import ExtractionError, extract_text
 from app.services.reminders import create_reminders_for_document
 from app.services.insights import regenerate_insights
+from app.services.scoped import scoped_get, scoped_query
+from app.services.filecheck import sniff_and_verify as verify_file_type, FileTypeError, deep_verify
+from app.services import audit
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -38,12 +41,16 @@ _FREE_TIER_DOC_LIMIT = 10  # F2.9 — free plan cap
 
 @router.post("/upload", response_model=DocumentDetailResponse, status_code=201)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Document:
+    _ip = request.client.host if request.client else None
     filename = file.filename or "upload"
     if not filename.lower().endswith(_ALLOWED_EXT):
+        audit.log_audit(db, current_user.id, audit.SECURITY_UPLOAD_BLOCKED,
+                        resource_type="upload.bad_extension", ip_address=_ip)
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type. Allowed: {', '.join(_ALLOWED_EXT)}",
@@ -69,7 +76,27 @@ async def upload_document(
     if len(data) == 0:
         raise HTTPException(status_code=400, detail="Empty file")
     if len(data) > _MAX_BYTES:
+        audit.log_audit(db, current_user.id, audit.SECURITY_UPLOAD_BLOCKED,
+                        resource_type="upload.oversized", ip_address=_ip)
         raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+
+    # F3.6 — verify the file's actual bytes match its claimed type (reject a
+    # renamed .exe/archive/script masquerading as a document).
+    try:
+        verify_file_type(filename, data)
+    except FileTypeError as exc:
+        audit.log_audit(db, current_user.id, audit.SECURITY_UPLOAD_BLOCKED,
+                        resource_type="upload.type_mismatch", ip_address=_ip)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # F3.6 (deep) — content integrity + malicious-structure scan: reject a
+    # corrupted file or a valid-signature PDF carrying scripts/auto-run actions.
+    try:
+        deep_verify(filename, data)
+    except FileTypeError as exc:
+        audit.log_audit(db, current_user.id, audit.SECURITY_UPLOAD_BLOCKED,
+                        resource_type="upload.content_unsafe", ip_address=_ip)
+        raise HTTPException(status_code=400, detail=str(exc))
 
     storage_path = storage.save_file(current_user.id, filename, data)
     doc = Document(
@@ -120,6 +147,8 @@ async def upload_document(
         db.commit()
         raise HTTPException(status_code=422, detail=f"Extraction failed: {exc}")
 
+    audit.log_audit(db, current_user.id, audit.DOC_UPLOAD,
+                    resource_type="document", resource_id=doc.id)
     return _detail(db, doc, current_user.id)
 
 
@@ -163,14 +192,9 @@ def share_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ShareGrant:
-    # Only the OWNER may share (Rule 4).
-    doc = (
-        db.query(Document)
-        .filter(Document.id == doc_id, Document.user_id == current_user.id)
-        .first()
-    )
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    # Only the OWNER may share (F3.2 scoped fetch — 404 if not owner).
+    doc = scoped_get(db, Document, doc_id, current_user.id,
+                     not_found_detail="Document not found")
     target = db.query(User).filter(User.email == body.shared_with_email).first()
     if target is None:
         raise HTTPException(status_code=404, detail="Recipient user not found")
@@ -186,19 +210,23 @@ def share_document(
     db.add(grant)
     db.commit()
     db.refresh(grant)
+    audit.log_audit(db, current_user.id, audit.SHARE_CREATE,
+                    resource_type="document", resource_id=doc.id)
     return grant
 
 
 def _accessible_document(db: Session, doc_id: uuid.UUID, user: User) -> Document | None:
     """F2.8 — return the doc if the user OWNS it OR has a valid non-expired grant.
 
-    Enforced server-side, not by trusting the client. Returns None if neither.
+    Owner path goes through the scoped helper (F3.2); the share-grant path is the
+    deliberate, audited widening of access beyond owner-scope. Returns None if
+    neither applies.
     """
-    doc = db.query(Document).filter(Document.id == doc_id).first()
-    if doc is None:
-        return None
-    if doc.user_id == user.id:  # owner path (Rule 4)
+    # Owner path — user-scoped fetch (returns None instead of raising here).
+    doc = scoped_query(db, Document, user.id).filter(Document.id == doc_id).first()
+    if doc is not None:
         return doc
+    # Shared path: a valid non-expired grant to this user.
     now = datetime.now(timezone.utc)
     grant = (
         db.query(ShareGrant)
@@ -209,7 +237,9 @@ def _accessible_document(db: Session, doc_id: uuid.UUID, user: User) -> Document
         )
         .first()
     )
-    return doc if grant is not None else None
+    if grant is None:
+        return None
+    return db.query(Document).filter(Document.id == doc_id).first()
 
 
 @router.get("/{doc_id}", response_model=DocumentDetailResponse)
@@ -221,8 +251,59 @@ def get_document(
     doc = _accessible_document(db, doc_id, current_user)  # owner OR valid grant
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    audit.log_audit(db, current_user.id, audit.DOC_ACCESS,
+                    resource_type="document", resource_id=doc.id)
     # Fields belong to the OWNER; read them by document owner id, not requester.
     return _detail(db, doc, doc.user_id)
+
+
+@router.get("/{doc_id}/download-url")
+def get_download_url(
+    doc_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """F3.3 — mint a short-lived signed URL for the file. Auth + access checked
+    here; the file route itself is opened only by the token."""
+    doc = _accessible_document(db, doc_id, current_user)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    token = storage.sign_download(doc.id, current_user.id)
+    return {"url": f"/documents/{doc.id}/file?uid={current_user.id}&token={token}",
+            "expires_in": 300}
+
+
+@router.get("/{doc_id}/file")
+def download_file(
+    doc_id: uuid.UUID,
+    uid: uuid.UUID,
+    token: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """F3.3 — serve decrypted bytes ONLY with a valid, non-expired signed token.
+    No bearer auth here: the signed token IS the capability (and it is bound to
+    uid + doc + expiry). An invalid/expired token → 403."""
+    if not storage.verify_download(doc_id, uid, token):
+        raise HTTPException(status_code=403, detail="Invalid or expired link")
+    # Confirm the doc is actually accessible to that uid (owner or valid grant).
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if doc is None or doc.storage_path is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    now = datetime.now(timezone.utc)
+    is_owner = doc.user_id == uid
+    has_grant = db.query(ShareGrant).filter(
+        ShareGrant.document_id == doc_id,
+        ShareGrant.shared_with_user_id == uid,
+        (ShareGrant.expires_at.is_(None)) | (ShareGrant.expires_at > now),
+    ).first() is not None
+    if not (is_owner or has_grant):
+        raise HTTPException(status_code=403, detail="Invalid or expired link")
+    try:
+        data = storage.read_file(doc.storage_path)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File unavailable")
+    return Response(content=data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{doc.filename}"'})
 
 
 @router.delete("/{doc_id}", status_code=204, response_class=Response)
@@ -231,13 +312,10 @@ def delete_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    doc = (
-        db.query(Document)
-        .filter(Document.id == doc_id, Document.user_id == current_user.id)  # RULE 4
-        .first()
-    )
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = scoped_get(db, Document, doc_id, current_user.id,
+                     not_found_detail="Document not found")
+    audit.log_audit(db, current_user.id, audit.DOC_DELETE,
+                    resource_type="document", resource_id=doc.id)
     db.delete(doc)  # ExtractedField rows cascade via FK ondelete=CASCADE
     db.commit()
     return Response(status_code=204)

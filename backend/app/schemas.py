@@ -122,6 +122,17 @@ class PlanResponse(BaseModel):
     document_limit: int | None  # None = unlimited
 
 
+# ---------- Audit log (F3.7) ----------
+class AuditLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    action: str
+    resource_type: str | None
+    resource_id: uuid.UUID | None
+    ip_address: str | None
+    created_at: datetime
+
+
 # ---------- Chat ----------
 class ChatRequest(BaseModel):
     conversation_id: uuid.UUID | None = None

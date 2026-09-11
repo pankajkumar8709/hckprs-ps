@@ -264,3 +264,50 @@ class DocumentChunk(Base, TimestampMixin):
         Index("ix_document_chunks_user_id", "user_id"),
         Index("ix_document_chunks_document_id", "document_id"),
     )
+
+
+class Job(Base, TimestampMixin):
+    """F3.9 — async job queue row. A worker claims queued jobs, runs the document
+    pipeline off the request thread, retries with backoff, and dead-letters after
+    max attempts. status: queued | running | done | failed."""
+    __tablename__ = "jobs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE")
+    )
+    job_type: Mapped[str] = mapped_column(String(32), nullable=False, default="ingest")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    next_run_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+    locked_by: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (
+        Index("ix_jobs_status_next_run", "status", "next_run_at"),
+        Index("ix_jobs_user_id", "user_id"),
+        CheckConstraint(
+            "status IN ('queued','running','done','failed')", name="ck_jobs_status"
+        ),
+    )
+
+
+class FailedJob(Base, TimestampMixin):
+    """F3.9 dead-letter — a job that exhausted its retries lands here, visible in
+    the admin/debug view, so failures are recoverable/inspectable, not lost."""
+    __tablename__ = "failed_jobs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    job_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (Index("ix_failed_jobs_user_id", "user_id"),)

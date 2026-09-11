@@ -29,3 +29,5 @@ Pillow==11.0.0
 # Phase 2 F2.4 — local embeddings for pgvector RAG (Groq has no embeddings API).
 # Pulls in torch/transformers (heavy). Model: all-MiniLM-L6-v2 (384-dim).
 sentence-transformers
+# Phase 3 — testing (F3.2 isolation suite)
+pytest==8.3.3

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -23,8 +23,9 @@ from app.schemas import (
     ConversationResponse,
     MessageResponse,
 )
-from app.services import llm, rag
+from app.services import llm, rag, audit
 from app.services.insights import regenerate_insights
+from app.services.scoped import scoped_get
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -110,21 +111,14 @@ def _create_tasks_action(db: Session, user_id: uuid.UUID, message: str) -> str:
 @router.post("", response_model=ChatResponse)
 def chat(
     body: ChatRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ChatResponse:
     # Resolve or create the conversation, scoped to this user.
     if body.conversation_id is not None:
-        conv = (
-            db.query(Conversation)
-            .filter(
-                Conversation.id == body.conversation_id,
-                Conversation.user_id == current_user.id,  # RULE 4
-            )
-            .first()
-        )
-        if conv is None:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        conv = scoped_get(db, Conversation, body.conversation_id, current_user.id,
+                          not_found_detail="Conversation not found")
     else:
         conv = Conversation(
             user_id=current_user.id,
@@ -168,6 +162,13 @@ def chat(
         rag_context, citations = rag.search(db, current_user.id, body.message, k=5)
         context = rag_context or _build_context(db, current_user.id)
         answer = llm.answer_question(body.message, context)
+        # F3.5 — if the output validator blocked a suspected injection, leave a trail.
+        if answer == llm.INJECTION_BLOCK_MESSAGE:
+            audit.log_audit(
+                db, current_user.id, audit.SECURITY_INJECTION_BLOCKED,
+                resource_type="chat.injection_blocked",
+                ip_address=request.client.host if request.client else None,
+            )
 
     assistant_msg = Message(
         conversation_id=conv.id,
@@ -200,16 +201,8 @@ def chat_stream(
     Same routing/grounding as /chat — no feature difference, just streamed."""
     # Resolve/create conversation (same as /chat).
     if body.conversation_id is not None:
-        conv = (
-            db.query(Conversation)
-            .filter(
-                Conversation.id == body.conversation_id,
-                Conversation.user_id == current_user.id,  # RULE 4
-            )
-            .first()
-        )
-        if conv is None:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        conv = scoped_get(db, Conversation, body.conversation_id, current_user.id,
+                          not_found_detail="Conversation not found")
     else:
         conv = Conversation(user_id=current_user.id, title=body.message[:60])
         db.add(conv)
@@ -305,16 +298,8 @@ def delete_conversation(
     current_user: User = Depends(get_current_user),
 ) -> Response:
     """Delete a single conversation (and its messages), user-scoped."""
-    conv = (
-        db.query(Conversation)
-        .filter(
-            Conversation.id == conv_id,
-            Conversation.user_id == current_user.id,  # RULE 4
-        )
-        .first()
-    )
-    if conv is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv = scoped_get(db, Conversation, conv_id, current_user.id,
+                      not_found_detail="Conversation not found")
     db.delete(conv)  # messages cascade
     db.commit()
     return Response(status_code=204)
@@ -326,16 +311,8 @@ def list_messages(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[Message]:
-    conv = (
-        db.query(Conversation)
-        .filter(
-            Conversation.id == conv_id,
-            Conversation.user_id == current_user.id,  # RULE 4
-        )
-        .first()
-    )
-    if conv is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv = scoped_get(db, Conversation, conv_id, current_user.id,
+                      not_found_detail="Conversation not found")
     return (
         db.query(Message)
         .filter(
