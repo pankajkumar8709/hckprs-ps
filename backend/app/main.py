@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+# from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from slowapi import _rate_limit_exceeded_handler
@@ -85,13 +85,21 @@ async def _observability_mw(request: _Req, call_next):
         metrics.record(status, _time.perf_counter() - start)
 
 # Web UI (Phase 1) — single-file React app served at /. Kept out of /docs' way.
-_WEB_INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
+# _WEB_INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
+
+
+# @app.get("/", include_in_schema=False)
+# def web_ui() -> FileResponse:
+#     return FileResponse(_WEB_INDEX)
 
 
 @app.get("/", include_in_schema=False)
-def web_ui() -> FileResponse:
-    return FileResponse(_WEB_INDEX)
-
+def root() -> dict:
+    return {
+        "message": "LifeOS Agent API is running",
+        "docs": "/docs",
+        "health": "/health",
+    }
 
 @app.on_event("startup")
 def _prewarm_embeddings() -> None:
